@@ -4,6 +4,15 @@ import Combine
 /// A tiny rounded status dot view.
 final class DotView: NSView {
     var color: NSColor = .systemGray { didSet { needsDisplay = true } }
+    override var intrinsicContentSize: NSSize { NSSize(width: 12, height: 12) }
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentHuggingPriority(.required, for: .vertical)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .vertical)
+    }
+    required init?(coder: NSCoder) { fatalError() }
     override func draw(_ dirtyBounds: NSRect) {
         NSColor.clear.setFill()
         bounds.fill()
@@ -57,13 +66,22 @@ final class ConsoleViewController: NSViewController {
         content.alignment = .leading
         content.spacing = 10
         content.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 8, right: 12)
+        content.translatesAutoresizingMaskIntoConstraints = false
 
         let scroll = NSScrollView()
         scroll.documentView = content
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.translatesAutoresizingMaskIntoConstraints = false
-        content.widthAnchor.constraint(equalTo: scroll.widthAnchor).isActive = true
+        NSLayoutConstraint.activate([
+            content.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            content.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor)
+        ])
+        // Stretch every card to the full content width (edgeInsets: 12 left + 12 right).
+        for arranged in content.arrangedSubviews {
+            arranged.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor, constant: -24).isActive = true
+        }
 
         let logPanel = logRow()
 
@@ -88,19 +106,28 @@ final class ConsoleViewController: NSViewController {
     // MARK: Row builders
 
     private func card(_ title: String, _ symbol: String, _ rows: [NSView]) -> NSView {
-        let header = NSStackView(views: [
-            imageView(symbol: symbol),
-            NSTextField(labelWithString: title).with { $0.font = .boldSystemFont(ofSize: 13) }
-        ])
+        let icon = imageView(symbol: symbol)
+        let titleField = NSTextField(labelWithString: title).with { $0.font = .boldSystemFont(ofSize: 13) }
+        let header = NSStackView()
+        header.setViews([icon, titleField], in: .leading)
         header.spacing = 6
         let stack = NSStackView(views: [header] + rows)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
-        let box = NSBox()
-        box.contentViewMargins = NSSize(width: 10, height: 10)
-        box.contentView = stack
-        return box
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        let container = NSView()
+        container.wantsLayer = true
+        container.layer?.cornerRadius = 10
+        container.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 10),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
+            container.bottomAnchor.constraint(equalTo: stack.bottomAnchor, constant: 10)
+        ])
+        return container
     }
 
     private func imageView(symbol: String) -> NSView {
