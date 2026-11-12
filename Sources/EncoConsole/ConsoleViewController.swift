@@ -1,26 +1,6 @@
 import AppKit
 import Combine
 
-/// A tiny rounded status dot view.
-final class DotView: NSView {
-    var color: NSColor = .systemGray { didSet { needsDisplay = true } }
-    override var intrinsicContentSize: NSSize { NSSize(width: 12, height: 12) }
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        setContentHuggingPriority(.required, for: .horizontal)
-        setContentHuggingPriority(.required, for: .vertical)
-        setContentCompressionResistancePriority(.required, for: .horizontal)
-        setContentCompressionResistancePriority(.required, for: .vertical)
-    }
-    required init?(coder: NSCoder) { fatalError() }
-    override func draw(_ dirtyBounds: NSRect) {
-        NSColor.clear.setFill()
-        bounds.fill()
-        color.setFill()
-        NSBezierPath(ovalIn: bounds.insetBy(dx: 1, dy: 1)).fill()
-    }
-}
-
 // MARK: - Design tokens (dark theme)
 
 private enum Theme {
@@ -35,14 +15,11 @@ private enum Theme {
     static func white(_ a: CGFloat) -> NSColor { .white.withAlphaComponent(a) }
 }
 
-/// Rounded, tinted control card.
-final class CardView: NSView {}
-
-/// Clickable row used for paired devices in the sidebar.
-final class ClickRow: NSView {
-    var onClick: (() -> Void)?
-    override func mouseDown(with event: NSEvent) { onClick?() }
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+private func tintedDot(_ color: NSColor) -> NSImageView {
+    let iv = NSImageView()
+    iv.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)
+    iv.contentTintColor = color
+    return iv
 }
 
 final class ConsoleViewController: NSViewController {
@@ -82,7 +59,7 @@ final class ConsoleViewController: NSViewController {
     private var jsonField = NSTextField()
 
     // Status bar
-    private var statusDot = DotView(frame: NSRect(x: 0, y: 0, width: 8, height: 8))
+    private var statusDot: NSImageView = tintedDot(.systemGray)
     private var statusLabel = NSTextField(labelWithString: "Not connected")
 
     // MARK: - Layout
@@ -214,6 +191,7 @@ final class ConsoleViewController: NSViewController {
         subscribe()
         bt.refreshPairedDevices()
         bt.announceReady()
+
     }
 
     // MARK: - Sidebar
@@ -263,7 +241,7 @@ final class ConsoleViewController: NSViewController {
         body.alignment = .leading
         body.spacing = 10
 
-        let container = ClickRow()
+        let container = NSView()
         container.wantsLayer = true
         container.layer?.backgroundColor = Theme.white(0.06).cgColor
         container.layer?.cornerRadius = 10
@@ -304,55 +282,28 @@ final class ConsoleViewController: NSViewController {
     }
 
     private func pairedRow(_ dev: PairedDevice) -> NSView {
-        let row = ClickRow()
+        // Plain NSButton row: no custom view subclass in the click path.
+        let row = NSButton(title: dev.name, target: self, action: #selector(pairedRowTapped(_:)))
+        row.isBordered = false
         row.wantsLayer = true
         row.layer?.cornerRadius = 8
-        row.onClick = { [weak self] in
-            self?.bt.selectedAddress = dev.address
-            self?.refreshSidebarSelection()
-        }
-        let icon = imageView("headphones", tint: Theme.white(0.4), size: 12).with {
-            $0.wantsLayer = true
-            $0.layer?.backgroundColor = Theme.white(0.05).cgColor
-            $0.layer?.cornerRadius = 6
-        }
-        icon.widthAnchor.constraint(equalToConstant: 26).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 26).isActive = true
-        let name = NSTextField(labelWithString: dev.name).with {
-            $0.font = .systemFont(ofSize: 12, weight: .medium)
-            $0.textColor = Theme.white(0.8)
-        }
-        let sub = NSTextField(labelWithString: dev.address).with {
-            $0.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
-            $0.textColor = Theme.white(0.3)
-        }
-        let labels = NSStackView(views: [name, sub])
-        labels.orientation = .vertical
-        labels.alignment = .leading
-        labels.spacing = 0
-        let connect = NSButton(title: "Connect", target: self, action: #selector(rowConnectTapped(_:)))
-        connect.bezelStyle = .rounded
-        connect.controlSize = .mini
-        connect.identifier = NSUserInterfaceItemIdentifier(dev.address)
-
-        let content = NSStackView(views: [icon, labels, NSView(), connect])
-        content.spacing = 8
-        content.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
-        row.addSubview(content)
-        content.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            content.topAnchor.constraint(equalTo: row.topAnchor),
-            content.leadingAnchor.constraint(equalTo: row.leadingAnchor),
-            content.trailingAnchor.constraint(equalTo: row.trailingAnchor),
-            row.bottomAnchor.constraint(equalTo: content.bottomAnchor)
-        ])
+        row.identifier = NSUserInterfaceItemIdentifier(dev.address)
+        row.toolTip = dev.address
+        row.image = NSImage(systemSymbolName: "headphones", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
+        row.imagePosition = .imageLeading
+        row.alignment = .left
+        row.font = .systemFont(ofSize: 12, weight: .medium)
+        row.contentTintColor = Theme.white(0.8)
+        row.heightAnchor.constraint(equalToConstant: 30).isActive = true
         row.widthAnchor.constraint(equalToConstant: 256).isActive = true
+        row.setButtonType(.momentaryPushIn)
         refreshRowSelection(row: row, address: dev.address)
         return row
     }
 
     private func refreshSidebarSelection() {
-        let rows = deviceRowsStack.arrangedSubviews.compactMap { $0 as? ClickRow }
+        let rows = deviceRowsStack.arrangedSubviews.compactMap { $0 as? NSButton }
         for (i, row) in rows.enumerated() where i < bt.pairedDevices.count {
             refreshRowSelection(row: row, address: bt.pairedDevices[i].address)
         }
@@ -367,6 +318,12 @@ final class ConsoleViewController: NSViewController {
         row.layer?.backgroundColor = selected ? Theme.white(0.08).cgColor : Theme.white(0.02).cgColor
         row.layer?.borderWidth = selected ? 1 : 0
         row.layer?.borderColor = Theme.accent.withAlphaComponent(0.5).cgColor
+        (row as? NSButton)?.attributedTitle = NSAttributedString(
+            string: (row as? NSButton)?.title ?? "",
+            attributes: [
+                .foregroundColor: selected ? NSColor.white : Theme.white(0.8),
+                .font: NSFont.systemFont(ofSize: 12, weight: selected ? .semibold : .medium)
+            ])
     }
 
     // MARK: - Banner
@@ -682,7 +639,7 @@ final class ConsoleViewController: NSViewController {
     }
 
     private func wrapCard(_ content: NSView) -> NSView {
-        let container = CardView()
+        let container = NSView()
         container.wantsLayer = true
         container.layer?.backgroundColor = Theme.cardBg.withAlphaComponent(0.6).cgColor
         container.layer?.cornerRadius = 12
@@ -736,9 +693,7 @@ final class ConsoleViewController: NSViewController {
     }
 
     private func miniDot(_ color: NSColor) -> NSView {
-        let v = DotView(frame: NSRect(x: 0, y: 0, width: 8, height: 8))
-        v.color = color
-        return v
+        tintedDot(color)
     }
 
     private func versionChip() -> NSView {
@@ -765,11 +720,10 @@ final class ConsoleViewController: NSViewController {
         if bt.isConnected { bt.disconnect() } else { bt.connect() }
     }
 
-    @objc private func rowConnectTapped(_ sender: NSButton) {
+    @objc private func pairedRowTapped(_ sender: NSButton) {
         guard let address = sender.identifier?.rawValue else { return }
         bt.selectedAddress = address
         refreshSidebarSelection()
-        if !bt.isConnected { bt.connect() }
     }
 
     @objc private func readInfoTapped() { bt.requestDeviceInfo() }
@@ -818,10 +772,10 @@ final class ConsoleViewController: NSViewController {
                 guard let self else { return }
                 let connected = state == .connected
                 switch state {
-                case .idle: self.statusDot.color = .systemGray; self.statusLabel.stringValue = "Not connected"
-                case .connecting: self.statusDot.color = .systemOrange; self.statusLabel.stringValue = "Connecting..."
-                case .connected: self.statusDot.color = .systemGreen; self.statusLabel.stringValue = "Connected"
-                case .failed(let m): self.statusDot.color = .systemRed; self.statusLabel.stringValue = "Failed: \(m)"
+                case .idle: self.statusDot.contentTintColor = .systemGray; self.statusLabel.stringValue = "Not connected"
+                case .connecting: self.statusDot.contentTintColor = .systemOrange; self.statusLabel.stringValue = "Connecting..."
+                case .connected: self.statusDot.contentTintColor = .systemGreen; self.statusLabel.stringValue = "Connected"
+                case .failed(let m): self.statusDot.contentTintColor = .systemRed; self.statusLabel.stringValue = "Failed: \(m)"
                 }
                 self.deviceStatusLabel.stringValue = connected ? "ACTIVE & CONNECTED" : "OFFLINE"
                 self.deviceStatusLabel.textColor = connected ? Theme.green : Theme.orange
