@@ -31,7 +31,7 @@ final class ConsoleViewController: NSViewController {
     // Controls we need to update from state.
     private let statusDot = DotView(frame: NSRect(x: 0, y: 0, width: 12, height: 12))
     private let statusLabel = NSTextField(labelWithString: "Not connected")
-    private let devicePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let devicePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 320, height: 25), pullsDown: false)
     private let connectButton = NSButton(title: "Connect", target: nil, action: nil)
     private let refreshListButton = NSButton(title: "Refresh list", target: nil, action: nil)
     private let ancSegments = NSSegmentedControl(labels: ["Off", "Noise cancel", "Transparency", "Smart (wind)"],
@@ -101,6 +101,7 @@ final class ConsoleViewController: NSViewController {
         view = root
         subscribe()
         bt.refreshPairedDevices()
+
     }
 
     // MARK: Row builders
@@ -151,7 +152,6 @@ final class ConsoleViewController: NSViewController {
         refreshListButton.bezelStyle = .rounded
         let row = NSStackView(views: [statusDot, statusLabel, devicePopup, connectButton, refreshListButton])
         row.spacing = 10
-        devicePopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
         return row
     }
 
@@ -343,15 +343,17 @@ final class ConsoleViewController: NSViewController {
 
     private func reloadDevicePopup() {
         devices = bt.pairedDevices
+        devicePopup.autoenablesItems = false
         devicePopup.removeAllItems()
         if bt.pairedDevices.isEmpty {
-            devicePopup.addItem(withTitle: "No paired devices")
-            devicePopup.isEnabled = false
+            let item = NSMenuItem(title: "No paired devices", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            devicePopup.menu?.addItem(item)
             return
         }
-        devicePopup.isEnabled = true
         for dev in bt.pairedDevices {
-            devicePopup.addItem(withTitle: "\(dev.name)  (\(dev.address))")
+            let item = NSMenuItem(title: "\(dev.name)  (\(dev.address))", action: nil, keyEquivalent: "")
+            devicePopup.menu?.addItem(item)
         }
         if let sel = bt.pairedDevices.first(where: { $0.address == bt.selectedAddress }) {
             devicePopup.selectItem(withTitle: "\(sel.name)  (\(sel.address))")
