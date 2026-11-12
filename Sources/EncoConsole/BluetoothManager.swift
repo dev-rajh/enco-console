@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import IOKit
 import IOBluetooth
@@ -32,7 +33,7 @@ final class BluetoothManager: NSObject, ObservableObject {
     @Published var pairedDevices: [PairedDevice] = []
     @Published var selectedAddress: String = UserDefaults.standard.string(forKey: "lastDeviceAddress") ?? ""
     @Published var state: ConnectionState = .idle
-    @Published var logText: String = ""
+    @Published var logLines: [LogLine] = []
     @Published var deviceInfo: [String: String] = [:]
     @Published var grantedCommands: [String] = []
     @Published var ancMask: UInt16 = 0
@@ -166,7 +167,7 @@ final class BluetoothManager: NSObject, ObservableObject {
         seq = seq &+ 1
         let status = ch.writeSync(&bytes, length: UInt16(bytes.count))
         let ok = status == kIOReturnSuccess
-        log(String(format: "TX %04X %@", cmd, payload.isEmpty ? "(empty)" : hex(payload)))
+        log(String(format: "%04X %@", cmd, payload.isEmpty ? "(empty)" : hex(payload)), tag: "TX", color: .systemGreen)
         if !ok { log("write failed, status \(status)") }
         return ok
     }
@@ -213,11 +214,16 @@ final class BluetoothManager: NSObject, ObservableObject {
 
     // MARK: Logging
 
-    private func log(_ line: String) {
+    /// Writes a startup line into the terminal so it is not empty on first launch.
+    func announceReady() {
+        log("ready; select your earbuds in the sidebar and press Connect", tag: "info", color: .systemTeal)
+    }
+
+    private func log(_ line: String, tag: String = "info", color: NSColor = .systemGray) {
         let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-        logText += "[\(stamp)] \(line)\n"
-        if logText.count > 32_000 {
-            logText = String(logText.suffix(24_000))
+        logLines.append(LogLine(time: stamp, tag: tag, text: line, color: color))
+        if logLines.count > 300 {
+            logLines.removeFirst(logLines.count - 300)
         }
     }
 
@@ -230,17 +236,17 @@ final class BluetoothManager: NSObject, ObservableObject {
     private func ingest(_ frames: [DecodedFrame]) {
         for f in frames {
             let isRsp = (f.cmd & 0x8000) != 0
-            log(String(format: "RX %04X %@", f.cmd, f.payload.isEmpty ? "(empty)" : hex(f.payload)))
+            log(String(format: "%04X %@", f.cmd, f.payload.isEmpty ? "(empty)" : hex(f.payload)), tag: "RX", color: .systemBlue)
 
             if isRsp, let first = f.payload.first, first == 0xFF {
-                log("  -> status FF (unsupported by this firmware)")
+                log("unsupported by this firmware", tag: "status", color: .systemOrange)
             }
 
             switch f.cmd {
             case Cmd.capabilityGet | 0x8000:
                 let granted = decodeCapability(payload: f.payload)
                 grantedCommands = granted
-                log("  -> capability bitmap: \(granted.count) commands granted")
+                log("\(granted.count) commands granted", tag: "caps", color: .systemTeal)
             case Cmd.eqGet | 0x8000 where f.payload.count >= 2 && f.payload[0] == 0x00:
                 eqMode = f.payload[1]
                 log("  -> EQ mode \(f.payload[1])")
@@ -253,7 +259,7 @@ final class BluetoothManager: NSObject, ObservableObject {
                         var pretty: [String: String] = [:]
                         for (k, v) in dict { pretty[k] = "\(v)" }
                         deviceInfo = pretty
-                        log("  -> device info JSON (\(dict.count) fields)")
+                        log("\(dict.count) fields", tag: "json", color: .systemPurple)
                     }
                 }
             default:
@@ -265,7 +271,7 @@ final class BluetoothManager: NSObject, ObservableObject {
                 let mask = UInt16(f.payload[2]) | (UInt16(f.payload[3]) << 8)
                 if mask != ancMask && mask != 0 {
                     ancMask = mask
-                    log(String(format: "  -> ANC mask 0x%04X", mask))
+                    log(String(format: "ANC mask 0x%04X", mask), tag: "push", color: .systemPurple)
                 }
             }
         }

@@ -53,11 +53,11 @@ open "build/Enco Console.app"
 
 1. Pair the earbuds with the Mac in System Settings > Bluetooth, as with any audio device.
 2. Launch Enco Console. macOS asks for Bluetooth permission once; grant it.
-3. Pick your earbuds from the device list (they are sorted to the top) and hit **Connect**.
-   The app opens an RFCOMM serial channel to the earbuds' vendor service and reads the
-   device info.
-4. Use the controls. Every send and receive is printed in the log panel at the bottom;
-   anything interesting can be selected and copied.
+3. Pick your earbuds from the sidebar (Enco devices are sorted to the top) and hit
+   **Connect**. The app opens an RFCOMM serial channel to the earbuds' vendor service
+   and reads the device info.
+4. Use the controls. Every send and receive appears with colors in the wire-log terminal
+   inside the Diagnostics card; anything interesting can be selected and copied.
 
 The last-used device address is remembered in `UserDefaults` so Connect works directly
 next time. The earbuds can stay connected to your phone for audio at the same time; the
