@@ -75,7 +75,11 @@ final class BluetoothManager: NSObject {
     // MARK: Device discovery
 
     func refreshPairedDevices() {
-        let all = (IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice]) ?? []
+        // IOBluetooth autoreleases objects on the surrounding pool; drain them in
+        // a tight scope so stale entries cannot surface in a later pool pop.
+        let all: [IOBluetoothDevice] = autoreleasepool {
+            (IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice]) ?? []
+        }
         pairedDevices = all
             .compactMap { dev -> PairedDevice? in
                 guard let addr = dev.addressString else { return nil }
@@ -122,10 +126,13 @@ final class BluetoothManager: NSObject {
         log("Starting SDP query for the SPP service record...", tag: "info")
         notify()
         // Make sure we have the SDP record (needs a running run loop; we are on main).
-        dev.performSDPQuery(nil)
+        // Each lookup runs in its own autorelease scope; see refreshPairedDevices note.
         var record: IOBluetoothSDPServiceRecord?
         for _ in 0..<16 {
-            record = dev.getServiceRecord(for: uuid)
+            record = autoreleasepool {
+                dev.performSDPQuery(nil)
+                return dev.getServiceRecord(for: uuid)
+            }
             if record != nil { break }
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
@@ -344,7 +351,7 @@ extension BluetoothManager {
 
     @objc(rfcommChannelData:data:length:)
     func rfcommChannelData(_ channel: IOBluetoothRFCOMMChannel?, data ptr: UnsafeMutableRawPointer?, length len: Int) {
-        let bytes = copyBytes(ptr, len)
+        let bytes = autoreleasepool { copyBytes(ptr, len) }
         guard !bytes.isEmpty else { return }
         hopToMain { [weak self] in
             guard let self else { return }
