@@ -39,7 +39,7 @@ final class ConsoleViewController: NSViewController {
     // Noise control
     private var ancPillButtons: [NSButton] = []
     private var ancMaskLabel = NSTextField(labelWithString: "mask 0x----")
-    private var depthValueLabel: NSTextField?
+    private var maskField = NSTextField()
 
     // EQ
     private var eqPillButtons: [NSButton] = []
@@ -373,7 +373,7 @@ final class ConsoleViewController: NSViewController {
     // MARK: - Cards
 
     private func noiseCard() -> NSView {
-        let pills = ["Off", "Noise cancel", "Transparency", "Smart (wind)"]
+        let pills = ["Off", "Noise cancel", "Transparency"]
         let row = NSStackView(views: [])
         row.spacing = 2
         row.wantsLayer = true
@@ -392,35 +392,25 @@ final class ConsoleViewController: NSViewController {
         ancMaskLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         ancMaskLabel.textColor = Theme.white(0.4)
 
-        let slider = NSSlider(value: 1, minValue: 1, maxValue: 3, target: self, action: #selector(depthSliderChanged(_:)))
-        slider.numberOfTickMarks = 3
-        slider.allowsTickMarkValuesOnly = true
-        slider.controlSize = .small
-        slider.widthAnchor.constraint(equalToConstant: 200).isActive = true
-        let depthValue = NSTextField(labelWithString: "mild").with {
-            $0.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
-            $0.textColor = Theme.accent
-            $0.widthAnchor.constraint(equalToConstant: 44).isActive = true
-        }
-        depthValueLabel = depthValue
-        let depthRow = NSStackView(views: [
-            NSStackView(views: [
-                NSTextField(labelWithString: "Cancellation depth").with {
-                    $0.font = .systemFont(ofSize: 12, weight: .medium); $0.textColor = Theme.white(0.75)
-                },
-                NSTextField(labelWithString: "level form (type 2) - unverified on this model").with {
-                    $0.font = .systemFont(ofSize: 10); $0.textColor = Theme.white(0.35)
-                }
-            ]).with { $0.orientation = .vertical; $0.alignment = .leading; $0.spacing = 1 },
+        maskField.placeholderString = "custom mask (e.g. 0020)"
+        maskField.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        maskField.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        let applyMask = diagButton("Apply mask", #selector(applyMaskTapped))
+        let customRow = NSStackView(views: [
+            NSTextField(labelWithString:
+                "Smart (wind) bit not identified yet; off=0008, ANC=0010, transparency=0100. "
+                + "Untested candidates: 0020, 0040, 0080, 0200.").with {
+                $0.font = .systemFont(ofSize: 10); $0.textColor = Theme.white(0.35)
+            },
             NSView(),
-            slider,
-            depthValue
+            maskField,
+            applyMask
         ])
-        depthRow.spacing = 8
+        customRow.spacing = 8
 
         let head = cardHeader(icon: "waveform", tint: .systemPurple, title: "NOISE CONTROL",
                               note: "cmd 0x404", trailing: ancMaskLabel)
-        let body = NSStackView(views: [head, row, depthRow])
+        let body = NSStackView(views: [head, row, customRow])
         body.orientation = .vertical
         body.alignment = .leading
         body.spacing = 10
@@ -429,15 +419,16 @@ final class ConsoleViewController: NSViewController {
 
     @objc private func ancPillTapped(_ sender: NSButton) {
         guard let raw = sender.identifier?.rawValue, let i = Int(raw) else { return }
-        let masks: [UInt16] = [ANCBit.off, ANCBit.noiseCancel, ANCBit.transparency, ANCBit.smart]
+        let masks: [UInt16] = [ANCBit.off, ANCBit.noiseCancel, ANCBit.transparency]
         applyPillSelection(ancPillButtons, selected: i)
         bt.setANC(mask: masks[i])
     }
 
-    @objc private func depthSliderChanged(_ sender: NSSlider) {
-        let v = sender.integerValue
-        depthValueLabel?.stringValue = ["mild", "medium", "deep"][min(max(v - 1, 0), 2)]
-        bt.send(cmd: Cmd.ancSet, payload: [0x02, UInt8(v)])
+    @objc private func applyMaskTapped() {
+        let clean = maskField.stringValue.trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: "0x", with: "")
+        guard let mask = UInt16(clean, radix: 16) else { return }
+        bt.setANC(mask: mask)
     }
 
     private func eqCard() -> NSView {

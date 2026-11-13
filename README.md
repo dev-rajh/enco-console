@@ -9,8 +9,9 @@ Unofficial community tool. Not affiliated with or endorsed by OPPO.
 
 ## Features
 
-- **Noise control** - Off, Noise cancel, Transparency, plus a Smart (wind noise reduction)
-  mode that exists in the vendor protocol. Verified live against an Air 5 Pro.
+- **Noise control** - Off (0x0008), Noise cancel (0x0010), Transparency (0x0100), verified
+  live on an Air 5 Pro. The Smart (wind noise reduction) mode bit is not identified yet;
+  a custom-mask field lets you probe candidate bits yourself.
 - **Equalizer** - Ultimate / Bass / Vocal presets, with state read-back.
 - **Game sound toggle** - the low-latency game mode command the vendor app uses.
 - **Device info** - name, firmware version, case version, serial and more, read through the
@@ -83,12 +84,12 @@ models.
 
 | Feature | Status |
 | --- | --- |
-| Frame format, ANC set, ANC bitmask bits (off / NC / transparency) | verified on Air 5 Pro |
+| Frame format, ANC set, ANC bitmask bits (off 0x0008 / NC 0x0010 / transparency 0x0100) | verified on Air 5 Pro |
 | EQ set + get (Ultimate / Bass / Vocal) | verified on Air 5 Pro |
 | Game sound type/enable command | decoded from the vendor app, not yet verified live |
 | Device info JSON, RSSI JSON | verified on Air 5 Pro |
 | Feature switch read (0x503) | decoded from the vendor app, not yet verified live |
-| Smart (wind) ANC bit | unverified; the mode exists in the vendor app's strings |
+| Smart (wind) ANC bit | unidentified; 0x0001 and 0x0004 turned out to be off/transparency variants |
 | Unknown command family 0xEEC1-0xEEC9 | granted by this firmware, semantics unknown |
 
 ## Privacy

@@ -19,11 +19,12 @@ enum Cmd {
 }
 
 /// ANC bitmask bits (confirmed live on an Enco Air 5 Pro).
+/// 0x0001 and 0x0004 also act as off/transparency variants; the Smart (wind)
+/// mode bit is not identified yet - candidates 0x0020, 0x0040, 0x0080, 0x0200.
 enum ANCBit {
-    static let transparency: UInt16 = 0x0001
-    static let smart: UInt16        = 0x0004  // "Smart (Wind noise reduction)" - untested
     static let off: UInt16          = 0x0008
     static let noiseCancel: UInt16  = 0x0010
+    static let transparency: UInt16 = 0x0100
 }
 
 /// EQ preset modes.

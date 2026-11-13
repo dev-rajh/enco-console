@@ -22,15 +22,17 @@ Response: same frame, cmdId = request | 0x8000.
 Poll-style responses start with a STATUS byte: `00` = success, `FF` = command not supported/failed,
 `06` = synthesized timeout status (PacketTimeoutProcessor). Decode every RX as `[status, data...]`.
 
-## ANC (0x404) bitmask semantics (from live tests + strings)
+## ANC (0x404) bitmask semantics (live-confirmed)
 
-Payload `[01, 01, bitmask...]` (type 1 = bitmask form). Bits observed:
-- 0x01 = transparency
-- 0x08 = off (user's "off" payload 08 00)
-- 0x10 = ANC on
-- "Smart (Wind noise reduction)" is an ANC MODE on capable models (string
-  `melody_common_reduce_wind_noise_tip_new` = "Smart (Wind noise reduction)") - another bit in this
-  mask, exact value untested (candidates: 0x04, 0x20, 0x40). Read current state with GET first.
+Payload `[01, 01, maskLo, maskHi]` (type 1 = bitmask form, mask is LITTLE-ENDIAN 16-bit).
+Live-confirmed bits on an Air 5 Pro:
+- 0x0008 = off
+- 0x0010 = ANC on
+- 0x0100 = transparency
+- 0x0001 = behaves as off (variant)
+- 0x0004 = behaves as transparency (variant)
+- "Smart (Wind noise reduction)" exists as a mode name in the vendor app; its bit is NOT
+  identified yet (candidates: 0x0020, 0x0040, 0x0080, 0x0200).
 - GET ANC state: poll **268 (0x10C)** (capability bit 8 pairs {268, 1028}).
 - Level form: type 2 = `[02, level]` (CurrentNoiseModeInfo).
 
