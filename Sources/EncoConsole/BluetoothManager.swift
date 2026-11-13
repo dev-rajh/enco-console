@@ -2,7 +2,6 @@ import AppKit
 import Foundation
 import IOKit
 import IOBluetooth
-import Combine
 
 /// SPP service UUID used by OPPO Enco earbuds for the vendor command channel.
 /// This is a public protocol constant (also documented by the Gadgetbridge community),
@@ -22,22 +21,34 @@ struct PairedDevice: Identifiable, Hashable {
     var id: String { address }
 }
 
+/// One entry of the on-screen terminal.
+struct LogLine {
+    let time: String
+    let tag: String
+    let text: String
+    let color: NSColor
+}
+
 /// Owns the RFCOMM channel to the earbuds, encodes/decodes the vendor protocol,
-/// and publishes UI state. All IOBluetooth work happens on the main thread /
-/// main run loop, which is where the framework delivers delegate callbacks.
+/// and drives the UI through a single onChange callback (deliberately no Combine:
+/// its RunLoop-delivery machinery crashed in swift_beginAccess on this
+/// toolchain/OS combination). Everything runs on the main thread.
 @MainActor
-final class BluetoothManager: NSObject, ObservableObject {
+final class BluetoothManager: NSObject {
 
-    // MARK: Published state
+    // MARK: State (read directly by the UI)
 
-    @Published var pairedDevices: [PairedDevice] = []
-    @Published var selectedAddress: String = UserDefaults.standard.string(forKey: "lastDeviceAddress") ?? ""
-    @Published var state: ConnectionState = .idle
-    @Published var logLines: [LogLine] = []
-    @Published var deviceInfo: [String: String] = [:]
-    @Published var grantedCommands: [String] = []
-    @Published var ancMask: UInt16 = 0
-    @Published var eqMode: UInt8 = 1
+    private(set) var pairedDevices: [PairedDevice] = []
+    var selectedAddress: String = UserDefaults.standard.string(forKey: "lastDeviceAddress") ?? ""
+    private(set) var state: ConnectionState = .idle
+    private(set) var logLines: [LogLine] = []
+    private(set) var deviceInfo: [String: String] = [:]
+    private(set) var grantedCommands: [String] = []
+    private(set) var ancMask: UInt16 = 0
+    private(set) var eqMode: UInt8 = 1
+
+    /// Called on the main thread after any state mutation.
+    var onChange: (() -> Void)?
 
     var isConnected: Bool { state == .connected }
     var connectionLabel: String {
@@ -56,14 +67,10 @@ final class BluetoothManager: NSObject, ObservableObject {
     private var seq: UInt8 = 0
     private let parser = FrameParser()
 
-    private var uuidBytesBacking: [UInt8] = []
 
-    private lazy var sppUUID: IOBluetoothSDPUUID? = {
-        guard let base = UUID(uuidString: sppUUIDString) else { return nil }
-        uuidBytesBacking = withUnsafeBytes(of: base.uuid) { Array($0) }
-        // Kept alive in a stored property in case this initializer does not copy the bytes.
-        return IOBluetoothSDPUUID(bytesNoCopy: &uuidBytesBacking, length: uuidBytesBacking.count)
-    }()
+    private func notify() {
+        onChange?()
+    }
 
     // MARK: Device discovery
 
@@ -80,6 +87,7 @@ final class BluetoothManager: NSObject, ObservableObject {
                 if aEnco != bEnco { return aEnco }
                 return a.name < b.name
             }
+        notify()
     }
 
     // MARK: Connection
@@ -88,26 +96,31 @@ final class BluetoothManager: NSObject, ObservableObject {
         guard state != .connecting, state != .connected else { return }
         let address = selectedAddress
         guard !address.isEmpty else {
-            log("Pick a paired device first.")
+            log("Pick a paired device first.", tag: "info")
+            notify()
             return
         }
         UserDefaults.standard.set(address, forKey: "lastDeviceAddress")
         state = .connecting
         log("Connecting to \(address)...")
+        notify()
         Task { await connect(address: address) }
     }
 
     private func connect(address: String) async {
         guard let dev = IOBluetoothDevice(addressString: address) else {
             state = .failed("paired device not found")
+            notify()
             log("Device with address \(address) is not paired to this Mac.")
+            notify()
             return
         }
         device = dev
-        guard let uuid = sppUUID else {
-            state = .failed("bad service UUID constant")
-            return
-        }
+        let bytes: [UInt8] = [0x00, 0x00, 0x07, 0x9a, 0xd1, 0x02, 0x11, 0xe1,
+                              0x9b, 0x23, 0x00, 0x02, 0x5b, 0x00, 0xa5, 0xa5]
+        let uuid = IOBluetoothSDPUUID(data: Data(bytes))
+        log("Starting SDP query for the SPP service record...", tag: "info")
+        notify()
         // Make sure we have the SDP record (needs a running run loop; we are on main).
         dev.performSDPQuery(nil)
         var record: IOBluetoothSDPServiceRecord?
@@ -118,30 +131,39 @@ final class BluetoothManager: NSObject, ObservableObject {
         }
         guard let rec = record else {
             state = .failed("SPP service record not found")
-            log("The device does not advertise the Enco SPP service. Is it the right device?")
+            notify()
+            log("The device does not advertise the Enco SPP service. Is it the right device?", tag: "status", color: .systemOrange)
+            notify()
             return
         }
         var cid: BluetoothRFCOMMChannelID = 0
         let st = rec.getRFCOMMChannelID(&cid)
         guard st == kIOReturnSuccess else {
             state = .failed("no RFCOMM channel in service record")
-            log("SDP record has no RFCOMM channel ID (status \(st)).")
+            notify()
+            log("SDP record has no RFCOMM channel ID (status \(st)).", tag: "status", color: .systemOrange)
+            notify()
             return
         }
+        log("SPP record found on RFCOMM channel \(cid); opening...", tag: "info")
+        notify()
         var ch: IOBluetoothRFCOMMChannel?
         // Blocks until the channel is open; data still arrives via the main run loop
         // through the delegate, so the UI stays responsive afterwards.
         let openStatus = dev.openRFCOMMChannelSync(&ch, withChannelID: cid, delegate: self)
         guard openStatus == kIOReturnSuccess, let opened = ch else {
             state = .failed("RFCOMM open failed (\(openStatus))")
-            log("RFCOMM open failed with status \(openStatus).")
+            notify()
+            log("RFCOMM open failed with status \(openStatus).", tag: "status", color: .systemOrange)
+            notify()
             return
         }
         opened.setDelegate(self)
         channel = opened
         parser.reset()
         state = .connected
-        log("Connected on RFCOMM channel \(cid).")
+        log("Connected on RFCOMM channel \(cid).", tag: "info")
+        notify()
         requestDeviceInfo()
     }
 
@@ -152,7 +174,8 @@ final class BluetoothManager: NSObject, ObservableObject {
         channel = nil
         device = nil
         if state != .idle { state = .idle }
-        log("Disconnected.")
+        log("Disconnected.", tag: "info")
+        notify()
     }
 
     // MARK: Sending
@@ -160,7 +183,8 @@ final class BluetoothManager: NSObject, ObservableObject {
     @discardableResult
     func send(cmd: Int, payload: [UInt8]) -> Bool {
         guard let ch = channel, isConnected else {
-            log(String(format: "Not connected; nothing sent (cmd 0x%04X).", cmd))
+            log(String(format: "Not connected; nothing sent (cmd 0x%04X).", cmd), tag: "info")
+            notify()
             return false
         }
         var bytes = Frame.encode(cmd: cmd, seq: seq, payload: payload)
@@ -168,7 +192,8 @@ final class BluetoothManager: NSObject, ObservableObject {
         let status = ch.writeSync(&bytes, length: UInt16(bytes.count))
         let ok = status == kIOReturnSuccess
         log(String(format: "%04X %@", cmd, payload.isEmpty ? "(empty)" : hex(payload)), tag: "TX", color: .systemGreen)
-        if !ok { log("write failed, status \(status)") }
+        if !ok { log("write failed, status \(status)", tag: "status", color: .systemOrange) }
+        notify()
         return ok
     }
 
@@ -178,6 +203,8 @@ final class BluetoothManager: NSObject, ObservableObject {
 
     func setEQ(mode: EQMode) {
         send(cmd: Cmd.eqSet, payload: Payloads.eq(mode))
+        eqMode = mode.rawValue
+        notify()
     }
 
     func setGame(on: Bool) {
@@ -212,12 +239,17 @@ final class BluetoothManager: NSObject, ObservableObject {
         sendJSON(#"{"cmd":"get_tws_rssi"}"#)
     }
 
-    // MARK: Logging
+    func clearLog() {
+        logLines = []
+        notify()
+    }
 
     /// Writes a startup line into the terminal so it is not empty on first launch.
     func announceReady() {
         log("ready; select your earbuds in the sidebar and press Connect", tag: "info", color: .systemTeal)
     }
+
+    // MARK: Logging
 
     private func log(_ line: String, tag: String = "info", color: NSColor = .systemGray) {
         let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
@@ -249,7 +281,7 @@ final class BluetoothManager: NSObject, ObservableObject {
                 log("\(granted.count) commands granted", tag: "caps", color: .systemTeal)
             case Cmd.eqGet | 0x8000 where f.payload.count >= 2 && f.payload[0] == 0x00:
                 eqMode = f.payload[1]
-                log("  -> EQ mode \(f.payload[1])")
+                log("EQ mode \(f.payload[1])", tag: "push", color: .systemPurple)
             case 0x0300:
                 // Diagnostic JSON push: [00, 00, {json...}]
                 if let brace = f.payload.firstIndex(of: 0x7B) {
@@ -259,7 +291,8 @@ final class BluetoothManager: NSObject, ObservableObject {
                         var pretty: [String: String] = [:]
                         for (k, v) in dict { pretty[k] = "\(v)" }
                         deviceInfo = pretty
-                        log("\(dict.count) fields", tag: "json", color: .systemPurple)
+                        let kv = pretty.keys.sorted().map { "\($0)=\(pretty[$0] ?? "")" }.joined(separator: "  ")
+                        log(kv, tag: "json", color: .systemPurple)
                     }
                 }
             default:
@@ -275,6 +308,7 @@ final class BluetoothManager: NSObject, ObservableObject {
                 }
             }
         }
+        notify()
     }
 }
 
@@ -287,19 +321,24 @@ extension BluetoothManager {
         return Array(UnsafeBufferPointer(start: ptr.assumingMemoryBound(to: UInt8.self), count: len))
     }
 
+    private func hopToMain(_ body: @escaping @MainActor () -> Void) {
+        Task { @MainActor in body() }
+    }
+
     @objc(rfcommChannelOpenComplete:channelStatus:)
     func rfcommChannelOpenComplete(_ channel: IOBluetoothRFCOMMChannel?, status channelStatus: Int32) {
-        Task { @MainActor [weak self] in
+        hopToMain { [weak self] in
             guard let self else { return }
             if channelStatus == kIOReturnSuccess {
                 self.state = .connected
-                self.log("Connected. You can send commands now.")
+                self.log("Connected. You can send commands now.", tag: "info")
                 self.requestDeviceInfo()
             } else {
                 self.state = .failed("open status \(channelStatus)")
-                self.log("RFCOMM open-complete reported status \(channelStatus).")
+                self.log("RFCOMM open-complete reported status \(channelStatus).", tag: "status", color: .systemOrange)
                 self.disconnect()
             }
+            self.notify()
         }
     }
 
@@ -307,7 +346,7 @@ extension BluetoothManager {
     func rfcommChannelData(_ channel: IOBluetoothRFCOMMChannel?, data ptr: UnsafeMutableRawPointer?, length len: Int) {
         let bytes = copyBytes(ptr, len)
         guard !bytes.isEmpty else { return }
-        Task { @MainActor [weak self] in
+        hopToMain { [weak self] in
             guard let self else { return }
             let frames = self.parser.feed(bytes)
             self.ingest(frames)
@@ -316,14 +355,15 @@ extension BluetoothManager {
 
     @objc(rfcommChannelClosed:)
     func rfcommChannelClosed(_ channel: IOBluetoothRFCOMMChannel?) {
-        Task { @MainActor [weak self] in
+        hopToMain { [weak self] in
             guard let self else { return }
             self.channel = nil
             self.device = nil
             if self.state == .connected {
                 self.state = .idle
-                self.log("Channel closed by the device.")
+                self.log("Channel closed by the device.", tag: "info")
             }
+            self.notify()
         }
     }
 }

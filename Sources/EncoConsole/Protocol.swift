@@ -1,13 +1,4 @@
 import Foundation
-import AppKit
-
-/// One entry of the on-screen terminal.
-struct LogLine {
-    let time: String
-    let tag: String
-    let text: String
-    let color: NSColor
-}
 
 /// OPPO Enco vendor protocol: framing, command IDs, payload builders.
 /// Wire format (little-endian, confirmed on-device):

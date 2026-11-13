@@ -3,6 +3,9 @@ import AppKit
 @main
 struct Main {
     static func main() {
+        // _NSAutomaticFocusRing's Swift code segfaults in CLT-built binaries on
+        // this OS build; the ring is purely decorative in this app, so disable it.
+        UserDefaults.standard.register(defaults: ["NSAutomaticFocusRingEnabled": false])
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate

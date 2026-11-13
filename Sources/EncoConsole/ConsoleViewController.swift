@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 
 // MARK: - Design tokens (dark theme)
 
@@ -25,7 +24,7 @@ private func tintedDot(_ color: NSColor) -> NSImageView {
 final class ConsoleViewController: NSViewController {
 
     private let bt = BluetoothManager()
-    private var cancellables = Set<AnyCancellable>()
+    private var lastDevicesKey = ""
 
     // Sidebar
     private var deviceRowsStack: NSStackView!
@@ -188,7 +187,7 @@ final class ConsoleViewController: NSViewController {
         }
 
         view = root
-        subscribe()
+        bt.onChange = { [weak self] in self?.refreshUI() }
         bt.refreshPairedDevices()
         bt.announceReady()
 
@@ -730,8 +729,6 @@ final class ConsoleViewController: NSViewController {
     @objc private func readRSSITapped() { bt.requestRSSI() }
     @objc private func readSwitchesTapped() { bt.refreshSwitchInventory() }
     @objc private func readCapabilityTapped() { bt.refreshCapability() }
-    @objc private func clearLogTapped() { bt.logLines = []; renderedLogCount = 0; terminalView.string = "" }
-
     @objc private func sendRawTapped() {
         let cmd = Int(cmdField.stringValue.trimmingCharacters(in: .whitespaces)
             .replacingOccurrences(of: "0x", with: ""), radix: 16) ?? -1
@@ -751,119 +748,76 @@ final class ConsoleViewController: NSViewController {
         bt.sendJSON(jsonField.stringValue)
     }
 
-    // MARK: - Subscriptions
+    // MARK: - UI refresh (pull model)
 
-    private func subscribe() {
-        bt.$pairedDevices
-            .receive(on: RunLoop.main)
-            .sink { [weak self] devices in
-                guard let self else { return }
-                self.deviceRowsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-                for dev in devices {
-                    self.deviceRowsStack.addArrangedSubview(self.pairedRow(dev))
-                }
-                self.refreshSidebarSelection()
+    private func refreshUI() {
+        // Sidebar rows: rebuild only when the paired list actually changes.
+        let key = bt.pairedDevices.map { $0.address }.joined(separator: ",")
+        if key != lastDevicesKey {
+            lastDevicesKey = key
+            deviceRowsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+            for dev in bt.pairedDevices {
+                deviceRowsStack.addArrangedSubview(pairedRow(dev))
             }
-            .store(in: &cancellables)
+        }
+        refreshSidebarSelection()
 
-        bt.$state
-            .receive(on: RunLoop.main)
-            .sink { [weak self] state in
-                guard let self else { return }
-                let connected = state == .connected
-                switch state {
-                case .idle: self.statusDot.contentTintColor = .systemGray; self.statusLabel.stringValue = "Not connected"
-                case .connecting: self.statusDot.contentTintColor = .systemOrange; self.statusLabel.stringValue = "Connecting..."
-                case .connected: self.statusDot.contentTintColor = .systemGreen; self.statusLabel.stringValue = "Connected"
-                case .failed(let m): self.statusDot.contentTintColor = .systemRed; self.statusLabel.stringValue = "Failed: \(m)"
-                }
-                self.deviceStatusLabel.stringValue = connected ? "ACTIVE & CONNECTED" : "OFFLINE"
-                self.deviceStatusLabel.textColor = connected ? Theme.green : Theme.orange
-                self.sidebarConnectButton.title = connected ? "Disconnect" : "Connect"
-                self.ancPillButtons.forEach { $0.isEnabled = connected }
-                self.eqPillButtons.forEach { $0.isEnabled = connected }
-                self.gameSwitch.isEnabled = connected
-            }
-            .store(in: &cancellables)
+        // Connection state
+        let connected = bt.isConnected
+        switch bt.state {
+        case .idle: statusDot.contentTintColor = .systemGray; statusLabel.stringValue = "Not connected"
+        case .connecting: statusDot.contentTintColor = .systemOrange; statusLabel.stringValue = "Connecting..."
+        case .connected: statusDot.contentTintColor = .systemGreen; statusLabel.stringValue = "Connected"
+        case .failed(let m): statusDot.contentTintColor = .systemRed; statusLabel.stringValue = "Failed: \(m)"
+        }
+        deviceStatusLabel.stringValue = connected ? "ACTIVE & CONNECTED" : "OFFLINE"
+        deviceStatusLabel.textColor = connected ? Theme.green : Theme.orange
+        sidebarConnectButton.title = connected ? "Disconnect" : "Connect"
+        ancPillButtons.forEach { $0.isEnabled = connected }
+        eqPillButtons.forEach { $0.isEnabled = connected }
+        gameSwitch.isEnabled = connected
 
-        bt.$logLines
-            .receive(on: RunLoop.main)
-            .sink { [weak self] lines in
-                guard let self else { return }
-                let ts = self.terminalView
-                if lines.count < self.renderedLogCount {
-                    ts.string = ""
-                    self.renderedLogCount = 0
-                }
-                for i in self.renderedLogCount..<lines.count {
-                    let l = lines[i]
-                    let s = NSMutableAttributedString()
-                    s.append(NSAttributedString(string: "[\(l.time)] ", attributes: [
-                        .foregroundColor: Theme.white(0.3),
-                        .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-                    ]))
-                    s.append(NSAttributedString(string: l.tag.uppercased() + " ", attributes: [
-                        .foregroundColor: l.color,
-                        .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .bold)
-                    ]))
-                    s.append(NSAttributedString(string: l.text + "\n", attributes: [
-                        .foregroundColor: Theme.white(0.75),
-                        .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-                    ]))
-                    ts.textStorage?.append(s)
-                }
-                self.renderedLogCount = lines.count
-                ts.scrollRangeToVisible(NSRange(location: (ts.string as NSString).length, length: 0))
-            }
-            .store(in: &cancellables)
+        // Wire log terminal (incremental)
+        let lines = bt.logLines
+        let ts = terminalView
+        if lines.count < renderedLogCount {
+            ts.string = ""
+            renderedLogCount = 0
+        }
+        for i in renderedLogCount..<lines.count {
+            let l = lines[i]
+            let s = NSMutableAttributedString()
+            s.append(NSAttributedString(string: "[\(l.time)] ", attributes: [
+                .foregroundColor: Theme.white(0.3),
+                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+            ]))
+            s.append(NSAttributedString(string: l.tag.uppercased() + " ", attributes: [
+                .foregroundColor: l.color,
+                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .bold)
+            ]))
+            s.append(NSAttributedString(string: l.text + "\n", attributes: [
+                .foregroundColor: Theme.white(0.75),
+                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+            ]))
+            ts.textStorage?.append(s)
+        }
+        renderedLogCount = lines.count
+        ts.scrollRangeToVisible(NSRange(location: (ts.string as NSString).length, length: 0))
 
-        bt.$deviceInfo
-            .receive(on: RunLoop.main)
-            .sink { [weak self] info in
-                guard let self, !info.isEmpty else { return }
-                let s = NSMutableAttributedString()
-                s.append(NSAttributedString(string: "device info ", attributes: [
-                    .foregroundColor: NSColor.systemPurple,
-                    .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .bold)
-                ]))
-                for key in info.keys.sorted() {
-                    s.append(NSAttributedString(string: "\(key)=\(info[key] ?? "")  ", attributes: [
-                        .foregroundColor: Theme.white(0.7),
-                        .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-                    ]))
-                }
-                s.append(NSAttributedString(string: "\n", attributes: [.foregroundColor: Theme.white(0.7)]))
-                self.terminalView.textStorage?.append(s)
-                self.terminalView.scrollRangeToVisible(NSRange(location: (self.terminalView.string as NSString).length, length: 0))
-            }
-            .store(in: &cancellables)
-
-        bt.$grantedCommands
-            .receive(on: RunLoop.main)
-            .sink { [weak self] granted in
-                guard let self, !granted.isEmpty else { return }
-                self.grantedLabel.stringValue = "granted: " + granted.joined(separator: " ")
-            }
-            .store(in: &cancellables)
-
-        bt.$ancMask
-            .receive(on: RunLoop.main)
-            .sink { [weak self] mask in
-                guard let self else { return }
-                self.ancMaskLabel.stringValue = mask == 0 ? "mask 0x----" : String(format: "mask 0x%04X", mask)
-            }
-            .store(in: &cancellables)
-
-        bt.$eqMode
-            .receive(on: RunLoop.main)
-            .sink { [weak self] mode in
-                guard let self else { return }
-                if let idx = EQMode.allCases.firstIndex(where: { $0.rawValue == mode }) {
-                    self.applyPillSelection(self.eqPillButtons, selected: idx)
-                }
-            }
-            .store(in: &cancellables)
+        // Capability + ANC mask + EQ mode
+        grantedLabel.stringValue = bt.grantedCommands.isEmpty ? "" : "granted: " + bt.grantedCommands.joined(separator: " ")
+        ancMaskLabel.stringValue = bt.ancMask == 0 ? "mask 0x----" : String(format: "mask 0x%04X", bt.ancMask)
+        if let idx = EQMode.allCases.firstIndex(where: { $0.rawValue == bt.eqMode }) {
+            applyPillSelection(eqPillButtons, selected: idx)
+        }
     }
+
+    @objc private func clearLogTapped() {
+        bt.clearLog()
+        renderedLogCount = 0
+        terminalView.string = ""
+    }
+
 }
 
 // MARK: - Helpers
